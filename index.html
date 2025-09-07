@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>GPU Shadow</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- โหลด Three.js และ Loader ต่าง ๆ -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/EXRLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dat.gui@0.7.9/build/dat.gui.min.js"></script>
+    
+    <script>
+        // ===== Renderer =====
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // ===== Scene =====
+        const scene = new THREE.Scene();
+
+        // ===== Camera =====
+        const camera = new THREE.PerspectiveCamera(
+            75,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+        );
+        camera.position.set(0, 2, 5);
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+        // ===== Lights =====
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 10, 2);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        scene.add(directionalLight);
+
+        // ===== GUI สำหรับแสง =====
+        const gui = new dat.GUI();
+        const lightFolder = gui.addFolder("Directional Light Position");
+        lightFolder.add(directionalLight.position, "x", -20, 20).step(0.1);
+        lightFolder.add(directionalLight.position, "y", -20, 20).step(0.1);
+        lightFolder.add(directionalLight.position, "z", -20, 20).step(0.1);
+        lightFolder.open();
+
+        // พื้น
+        const ground = new THREE.Mesh(
+            new THREE.PlaneBufferGeometry(12, 12),
+            new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.9, metalness: 0.0 })
+        );
+        ground.rotation.x = -Math.PI/2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // โหลด EXR
+        const exrLoader = new THREE.EXRLoader();
+        exrLoader.load('cyclorama_hard_light_1k.exr', function(texture) {
+            texture.mapping = THREE.EquirectangularReflectionMapping;
+            scene.background = texture;    // พื้นหลัง 360°
+            scene.environment = texture;   // environment สำหรับ PBR materials
+        });
+
+        // ===== Car variables =====
+        let car = null;
+        let speed = 0;        // ความเร็วปัจจุบัน
+        const maxSpeed = 300; // km/h
+        let acceleration = 0; // การเร่ง (เพิ่ม/ลดความเร็ว)
+        const turnSpeed = 0.02;
+
+        // Key states
+        const keys = { w: false, s: false, a: false, d: false };
+
+        // โหลดโมเดล
+        const loader = new THREE.GLTFLoader();
+        
+
+        loader.load("free__atlanta_corperate_office_building.glb", function(gltf) {
+                    const model = gltf.scene;
+                    model.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.material.metalness = 0;
+                            child.material.roughness = 0;
+                        }
+                    });
+                    model.position.set(-5, -0.4, 0);
+                    model.scale.set(0.05, 0.05, 0.05);
+                    scene.add(model);
+        })
+
+         loader.load("ac_car.glb", function(gltf) {
+            car = gltf.scene;
+            car.traverse((child) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.material.metalness = 0;
+                    child.material.roughness = 0;
+                }
+            });
+            car.position.set(0, 0, 0);
+            car.scale.set(0.3, 0.3, 0.3);
+            scene.add(car);
+
+            // GUI ควบคุมรถ
+            const carFolder = gui.addFolder("Car Controls");
+            carFolder.add(car.position, "x", -10, 10).step(0.1).listen();
+            carFolder.add(car.position, "z", -10, 10).step(0.1).listen();
+            carFolder.open();
+
+            // GUI ความเร็ว
+            gui.add(window, "speed", 0, maxSpeed).name("Speed (km/h)").listen();
+        });
+
+        // ===== Keyboard controls =====
+        window.addEventListener("keydown", (e) => {
+            if (keys[e.key.toLowerCase()] !== undefined) keys[e.key.toLowerCase()] = true;
+        });
+        window.addEventListener("keyup", (e) => {
+            if (keys[e.key.toLowerCase()] !== undefined) keys[e.key.toLowerCase()] = false;
+        });
+
+        // ===== Animate =====
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (car) {
+                // เร่ง/เบรค
+                if (keys.w) acceleration = 1;
+                else if (keys.s) acceleration = -1;
+                else acceleration = 0;
+
+                // อัปเดตความเร็ว (clamp 0–maxSpeed)
+                speed += acceleration * 2; // ค่าเร่ง
+                if (speed < -maxSpeed) speed = 0;
+                if (speed > maxSpeed) speed = maxSpeed;
+
+                // หมุนรถ (ซ้าย-ขวา)
+                if (keys.a) car.rotation.y += turnSpeed;
+                if (keys.d) car.rotation.y -= turnSpeed;
+
+                // เคลื่อนรถตามความเร็ว
+                const dir = new THREE.Vector3(
+                    Math.sin(car.rotation.y),
+                    0,
+                    Math.cos(car.rotation.y)
+                );
+                car.position.addScaledVector(dir, speed * 0.001); // scale ให้ไม่เร็วเกินไป
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // ===== Resize Handler =====
+        window.addEventListener("resize", () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+
+</html>
